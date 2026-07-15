@@ -2,7 +2,6 @@
 .env
 .env.*
 *.env
-jira/settings.py
 
 # Virtual environments
 venv/
