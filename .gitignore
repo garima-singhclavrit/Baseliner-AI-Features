@@ -1,0 +1,53 @@
+# Secrets & environment-specific config
+.env
+.env.*
+*.env
+jira/settings.py
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+anaconda3/
+
+# Python cache / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# AI/ML model files and weights
+*.pkl
+*.h5
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+
+# Logs
+*.log
+err.txt
+res.txt
+nohup.out
+
+# Temporary files / backup archives / DB dumps
+*.tmp
+*.temp
+*.bak.zip
+backup.sql
+backup_code.zip
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# OS / editor specific files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,309 @@
+import json
+import time
+
+import pandas as pd
+from django.conf import settings
+from django.shortcuts import render
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from estimates.models import new_model
+from .serializer import NewSerializer
+from .gpt_model import GPT
+from AI.operations import preprocessing, encodings, predictions
+from AI.fit_validator import validate_fit_token
+# from django.views.decorators.csrf import csrf_exempt
+# from django.utils.decorators import method_decorator
+
+
+gpt_model = GPT()
+
+# @method_decorator(csrf_exempt, name='dispatch')
+
+class ESTViews(APIView):
+
+    def get(self, request):
+        data = new_model.objects.all()
+        serializer = NewSerializer(data, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        print("\n===== REQUEST HEADERS =====")
+
+        for key, value in request.headers.items():
+            print(f"{key}: {value}")
+
+        print("===========================\n")
+        auth_header = request.headers.get("Authorization")
+
+        print("AUTH HEADER:", auth_header)
+
+        if not auth_header:
+            return Response(
+                {"error": "Missing Authorization header"},
+                status=401
+            )
+
+        if not auth_header.startswith("Bearer "):
+            return Response(
+                {"error": "Invalid Authorization format"},
+                status=401
+            )
+
+        token = auth_header.replace("Bearer ", "")
+
+        print("TOKEN:", token[:50])
+        try:
+            claims = validate_fit_token(token)
+
+            print("\n========== JWT CLAIMS ==========")
+
+            if claims.get("type") == "context_token":
+                jwt_claims = claims.get("claims", {})
+            else:
+                jwt_claims = claims
+
+            print(f"accountId      : {jwt_claims.get('accountId')}")
+            print(f"appId          : {jwt_claims.get('appId')}")
+            print(f"installationId : {jwt_claims.get('installationId')}")
+            print(f"issuer         : {jwt_claims.get('iss')}")
+            print(f"audience       : {jwt_claims.get('aud')}")
+            print(f"cloudId        : {jwt_claims.get('context', {}).get('cloudId')}")
+            print(f"siteUrl        : {jwt_claims.get('context', {}).get('siteUrl')}")
+            print(f"moduleKey      : {jwt_claims.get('context', {}).get('moduleKey')}")
+
+            print("================================\n")
+
+        except Exception as e:
+            print("\n========== JWT VALIDATION ERROR ==========")
+            print(str(e))
+            print("==========================================\n")
+
+            return Response(
+                {"error": str(e)},
+                status=401
+            )
+
+        tasks_data = request.data
+        created_tasks = []
+
+        for task_data in tasks_data:
+            serializer = NewSerializer(data=task_data)
+            if serializer.is_valid():
+                serializer.save()
+
+                start = time.time()
+                task_id = task_data.get('task_id')
+                task_name = task_data.get('task_name')
+                task_description = task_data.get('task_descrption')
+                task_label = task_data.get('task_label')
+                planned_estimate = task_data.get('planned_estimate')
+
+                sprint_number = task_data.get('sprint_number')
+                priority = task_data.get('priority')
+
+                Optimistic_Estimate = task_data.get('Optimistic_estimate')
+                Most_Likely_Estimate = task_data.get('Most_likely_estimate')
+                Pessimistic_Estimate = task_data.get('Pessimistic_estimate')
+
+                EST_Model = getattr(settings, 'EST_MODEL', 'the_default_value')
+
+                data = {
+                    'task_name': [task_name],
+                    'task_description': [task_description],
+                    'task_label': [task_label],
+                    'planned_estimate': [planned_estimate],
+                    'priority': [priority],
+                    'sprint_number': [sprint_number],
+                    'planned_estimate': [planned_estimate],
+                    'Optimistic_Estimate': [Optimistic_Estimate],
+                    'Most_Likely_Estimate': [Most_Likely_Estimate],
+                    'Pessimistic_Estimate': [Pessimistic_Estimate],
+                }
+
+                df = pd.DataFrame(data)
+                pre_start = time.time()
+                preprocessing_outcome = preprocessing(df)
+                pre_end = time.time()
+                print(f"Preprocessing time is : {pre_end - pre_start}")
+
+                Final_estimate = preprocessing_outcome[3]
+                riskFactor = preprocessing_outcome[1]
+
+                enc_start = time.time()
+                encodings_output = encodings(df, gpt_model, *preprocessing_outcome)
+                enc_end = time.time()
+                print(f"Encoding time is : {enc_end - enc_start}")
+
+                pred_start = time.time()
+                Ai_estimate = predictions(EST_Model, *encodings_output)
+                pred_end = time.time()
+                print(f"Predictions time is : {pred_end - pred_start}")
+
+                print(Ai_estimate)
+
+                if Ai_estimate < (0.7 * Final_estimate) or Ai_estimate > (1.3 * Final_estimate) or Ai_estimate == 0:
+                    Ai_estimate = int(Final_estimate)
+
+                    x = {
+                        'task_id': task_id,
+                        'Ai_estimate': Final_estimate,
+                        'threePointEstimate': Final_estimate,
+                        'riskFactor': riskFactor,
+                        'Replaced': 'YES'
+                    }
+
+                else:
+                    x = {
+                        'task_id': task_id,
+                        'Ai_estimate': Ai_estimate,
+                        'threePointEstimate': Final_estimate,
+                        'riskFactor': riskFactor,
+                        'Replaced': 'NO'
+                    }
+
+                print(f"The response is : {x}")
+                created_tasks.append(x)
+
+                end = time.time()
+                print(f"Total time taken is : {end - start}")
+
+            else:
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        y = json.dumps(created_tasks, default=lambda o: o.item() if hasattr(o, "item") else (o.tolist() if hasattr(o, "tolist") else str(o)))
+        json_data = json.loads(y)
+        return Response(json_data)
+
+# import json
+# import time
+
+# import pandas as pd
+# from django.conf import settings
+# from django.shortcuts import render
+# from rest_framework import status
+# from rest_framework.response import Response
+# from rest_framework.views import APIView
+
+# from estimates.models import new_model
+# from .serializer import NewSerializer
+# from .gpt_model import GPT
+# from AI.operations import preprocessing, encodings, predictions
+
+
+# # Initialize GPT model only once
+# gpt_model = GPT()
+
+# class ESTViews(APIView):
+
+#     def get(self,request):
+#         data = new_model.objects.all()
+#         serializer = NewSerializer(data,many=True)
+#         return Response(serializer.data)
+
+#     def post(self,request):
+#         tasks_data = request.data
+#         created_tasks = []
+
+#         for task_data in tasks_data:
+
+#             serializer = NewSerializer(data=task_data)
+#             if serializer.is_valid():
+#                 serializer.save()
+
+#                 #Reading input Parameters
+#                 start = time.time()
+#                 task_id = task_data.get('task_id')
+#                 task_name = task_data.get('task_name')
+#                 task_description = task_data.get('task_descrption')
+#                 task_label = task_data.get('task_label')
+#                 planned_estimate = task_data.get('planned_estimate')
+                
+#                 sprint_number = task_data.get('sprint_number')
+#                 priority = task_data.get('priority')
+                
+#                 Optimistic_Estimate = task_data.get('Optimistic_estimate')
+#                 Most_Likely_Estimate = task_data.get('Most_likely_estimate')
+#                 Pessimistic_Estimate = task_data.get('Pessimistic_estimate')
+
+#                 #Load model from pickle file
+#                 EST_Model = getattr(settings, 'EST_MODEL', 'the_default_value')
+
+#                 # Task_name	Task_description Task_label	Task_priority	Sprint_number	Planned_estimate	Actual_estimate	Optimistic	Most_likely	...	Weighted_average	Standard_deviation	Risk_factor	Standard_confidence	High_confidence	Higher_confidence	Highest_confidence	Final_estimate	Variance	Ai_estimate
+                
+#                 data = {
+#                         'task_name' : [task_name],
+#                         'task_description': [task_description],
+#                         'task_label' : [task_label],
+#                         'planned_estimate': [planned_estimate],
+#                         'priority' : [priority],
+#                         'sprint_number' : [sprint_number],
+#                         'planned_estimate': [planned_estimate],
+#                         'Optimistic_Estimate': [Optimistic_Estimate],
+#                         'Most_Likely_Estimate': [Most_Likely_Estimate],
+#                         'Pessimistic_Estimate': [Pessimistic_Estimate],
+#                 }
+
+#                 #AI part
+
+#                 df = pd.DataFrame(data)
+#                 pre_start = time.time()
+#                 preprocessing_outcome = preprocessing(df)
+#                 pre_end = time.time()
+#                 print(f"Preprocessing time is : {pre_end - pre_start}")
+                
+#                 Final_estimate = preprocessing_outcome[3]                
+#                 riskFactor = preprocessing_outcome[1]
+                
+#                 enc_start = time.time()
+#                 encodings_output = encodings(df,gpt_model,*preprocessing_outcome)
+#                 enc_end = time.time()
+#                 print(f"Encoding time is : {enc_end - enc_start}")
+                
+#                 pred_start = time.time()
+#                 Ai_estimate = predictions(EST_Model,*encodings_output)
+#                 pred_end = time.time()
+#                 print(f"Predictions time is : {pred_end - pred_start}")
+
+
+#                 # print(type(Ai_estimate))
+#                 print(Ai_estimate)
+              
+#                 # Logic to check if AI estimate differ by threepointestimate
+                
+#                 if Ai_estimate > (0.7 * Final_estimate) or Ai_estimate < (1.3 * Final_estimate) or Ai_estimate ==0:
+                    
+#                     Ai_estimate = int(Final_estimate)
+
+#                     x = {
+#                         'task_id': task_id,
+#                         'Ai_estimate': Final_estimate,
+#                         'threePointEstimate':Final_estimate,
+#                         'riskFactor': riskFactor,
+#                         'Replaced': 'YES'
+#                         }
+                    
+#                 else:
+#                     x = {
+#                         'task_id': task_id,
+#                         'Ai_estimate': Ai_estimate,
+#                         'threePointEstimate':Final_estimate,
+#                         'riskFactor': riskFactor,
+#                         'Replaced': 'NO'
+#                         }
+                    
+#                 print(f"The response is : {x}")    
+#                 #Convreting to JSON Array
+#                 created_tasks.append(x)
+
+#                 end = time.time()
+#                 print(f"Total time taken is : {end - start}")
+        
+#             else:
+#                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+
+#         y = json.dumps(created_tasks) 
+#         json_data = json.loads(y)   
+#         return Response(json_data)
